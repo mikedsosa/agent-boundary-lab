@@ -1,0 +1,3 @@
+Synthetic queue status
+state: nominal
+depth: 3
