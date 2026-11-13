@@ -1,6 +1,6 @@
 # Agent Boundary Lab
 
-> **Draft.** The docs were fact-checked on 10 Nov 2026. There has been no independent third-party security review. This is a local demonstration, not a production control. Released under the MIT License; see [LICENSE](LICENSE).
+> The docs were fact-checked on 10 Nov 2026. There has been no independent third-party security review. This is a local demonstration, not a production control. Released under the MIT License; see [LICENSE](LICENSE).
 
 The planner in this lab is a handwritten script. It is not an LLM. Nothing here calls a model, downloads weights, or uses a paid API. The scenarios show how a separate executor treats hostile or mistaken tool calls. They are not an evaluation of any model.
 
