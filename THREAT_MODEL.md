@@ -2,6 +2,8 @@
 
 > **Draft.** The docs were fact-checked on 10 Nov 2026. There has been no independent third-party security review. This document describes the lab as implemented. It is not a claim that the lab meets OWASP, NIST, or any other standard, and it is not an audit report.
 
+A STRIDE table with trust boundaries, a data-flow diagram, and a test mapping is in [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md).
+
 ## System
 
 The lab is one Linux process. A scripted planner proposes tool calls. `Executor.execute` is the only path that turns a proposal into a read, a directory listing, or a new file. The sandbox is a directory of synthetic fixtures. The operator key, nonce store, and audit log are sibling directories, not tools.
