@@ -1,6 +1,8 @@
 # Threat model
 
-> **Draft.** The docs were fact-checked on 10 Nov 2026. There has been no independent third-party security review. This document describes the lab as implemented. It is not a claim that the lab meets OWASP, NIST, or any other standard, and it is not an audit report.
+> **Draft.** The docs were fact-checked on 10 Nov 2026, and this file and docs/THREAT-MODEL.md were rechecked on 17 Nov 2026. There has been no independent third-party security review. This document describes the lab as implemented. It is not a claim that the lab meets OWASP, NIST, or any other standard, and it is not an audit report.
+
+A STRIDE table with trust boundaries, a data-flow diagram, and a test mapping is in [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md).
 
 ## System
 
@@ -46,7 +48,7 @@ No model is called. Handwritten scenarios are a way to drive the boundary. They 
 
 This is not a strong OS sandbox. It is a disciplined open in one process. The same OS user can open the symlink target, the hard-linked inode, or the approval key without calling the executor. Tests show the OS user can read the escape symlink and the executor cannot.
 
-**Approval is not agent text.** The token is URL-safe base64 of the canonical JSON, a dot, and URL-safe base64 of the HMAC-SHA256. The JSON binds version, the digest of the action, a 16-byte nonce, `iat`, and `exp`. The digest covers capability, canonical relative path, SHA-256 of the UTF-8 content, and the content length. The signature is checked before the digest comparison. Extra fields, a non-canonical body, a bad signature, a lifetime over 3600 seconds, `now < iat`, and `now >= exp` are denials. The nonce is consumed under a lock only after those checks pass. Tools cannot write the key: they have no such capability, the key is outside the sandbox, the path is not a symlink, and the file mode must be `0600`.
+**Approval is not agent text.** The token is URL-safe base64 of the canonical JSON, a dot, and URL-safe base64 of the HMAC-SHA256. The JSON binds version, the digest of the action, a 16-byte nonce, `iat`, and `exp`. The digest covers capability, canonical relative path, SHA-256 of the UTF-8 content, and the content length. The signature is checked before the digest comparison. Extra fields, a non-canonical body, a bad signature, a lifetime over 3600 seconds, `now < iat`, and `now >= exp` are denials. The nonce is consumed under a lock only after those checks pass. Tools cannot write the key: they have no such capability, the key is outside the sandbox, the path is not a symlink, and the file must have no group or world permission bits (it is created as 0600).
 
 A token does not widen scope. A signed write to `private/token.txt` is still `scope_denied` and does not change the file. A token attached to a read is `approval_not_applicable` and the read is not performed.
 
@@ -61,10 +63,10 @@ Enforced in this process:
 - `..`, absolute paths, and empty or odd components are rejected as strings before any open.
 - `O_NOFOLLOW` on the opened component means a symlink fails the open instead of being followed. `fstat` then applies to the inode behind that fd.
 - `O_EXCL` fails if the destination name exists, including when it is a symlink, so the write does not follow a link planted at the final name. An `lstat` just before the open only selects the error string.
+- A bind mount has a different mount id even when `st_dev` matches. The walk compares `/proc/self/fdinfo` `mnt_id` with the sandbox root captured at open. A tmpfs, a directory bind mount, and a file bind mount were denied under a user namespace, including a write approved before `out/` was bind-mounted. If the mount id cannot be read, the open is denied.
 
 Not enforced:
 
-- A bind mount has a different mount id even when `st_dev` matches. The walk compares `/proc/self/fdinfo` `mnt_id` with the sandbox root captured at open. A tmpfs, a directory bind mount, and a file bind mount were denied under a user namespace, including a write approved before `out/` was bind-mounted. If the mount id cannot be read, the open is denied.
 - Replacing a regular file with a FIFO between `lstat` and `open` can still open the new inode. The static FIFO case is rejected before `open`. Symlink replacement is rejected by `O_NOFOLLOW`.
 - A hard link is denied only while `st_nlink != 1`. If the other name is removed, the count can return to 1 and the bytes live at the sandbox path. That is an ordinary in-sandbox file, and it is also a way to place bytes there outside the fixture copy.
 - A privileged writer that can replace parent directories the process has already passed is outside this model. Holding a directory fd pins the directory inode that was opened; it does not freeze the rest of the machine.
@@ -72,7 +74,7 @@ Not enforced:
 
 ## Relation to the two OWASP pages that were read
 
-Read on 8 November 2026:
+Pages last checked on 17 November 2026:
 
 - OWASP Gen AI Security Project, "LLM01:2025 Prompt Injection", <https://genai.owasp.org/llmrisk/llm01-prompt-injection/>
 - OWASP Gen AI Security Project, "LLM06:2025 Excessive Agency", <https://genai.owasp.org/llmrisk/llm062025-excessive-agency/>
@@ -81,7 +83,7 @@ LLM01 describes direct and indirect prompt injection, including instructions in 
 
 LLM06 describes damaging actions from unexpected or manipulated model output, caused by excessive functionality, excessive permissions, or excessive autonomy. It recommends few tools, no open-ended shell or URL tool, authorization in the downstream system, human approval, and logging as a way to limit damage rather than as the prevention. This lab follows that shape for local files. It does not implement the per-user OAuth or the rate limits that page discusses. A separate OS identity is also not implemented here. That is a lab limitation, not an item on the LLM06 page. The audit is a damage-investigation aid with the rewrite limit above. It is not a preventative control.
 
-Accessed 10 Nov 2026. The citations above are the 2025 edition. OWASP published the Top 10 for LLM Applications 2026 on 4 Aug 2026. Prompt Injection is still LLM01:2026. Excessive Agency is now LLM03:2026, and LLM06:2026 is Unbounded Consumption. That date and those three titles are from the 2026 list README, read the same day: <https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/README.md>. The project page for that edition, also read the same day, is <https://genai.owasp.org/resource/owasp-genai-llm-top-10-2026/>. The 2025 pages remain the ones this draft quotes.
+Last checked 17 Nov 2026. The citations above are the 2025 edition. OWASP published the Top 10 for LLM Applications 2026 on 4 Aug 2026. Prompt Injection is still LLM01:2026. Excessive Agency is now LLM03:2026, and LLM06:2026 is Unbounded Consumption. That date and those three titles are from the 2026 list README, read the same day: <https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/README.md>. The project page for that edition, also read the same day, is <https://genai.owasp.org/resource/owasp-genai-llm-top-10-2026/>. The 2025 pages remain the ones this draft quotes.
 
 No other 2025 document was read for these citations. The reference lists on those pages are not sources for this draft.
 
