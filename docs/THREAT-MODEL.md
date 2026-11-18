@@ -1,6 +1,6 @@
 # STRIDE threat model
 
-> **Draft, 17 Nov 2026.** Written by the lab's author. It has not been fact-checked yet, and there has been no independent third-party security review. It describes the lab as implemented at commit `17ee3a8`. It is not an audit report and not a claim of compliance with any standard.
+> **Draft, 17 Nov 2026.** Written by the lab's author. It has not been fact-checked yet, and there has been no independent third-party security review. It describes the lab as implemented at commit [`96d816a`](https://github.com/mikedsosa/agent-boundary-lab/commit/96d816a8781b067b2d35dbbe05621db4b02c1a8b), which includes the S4 preview fix. It is not an audit report and not a claim of compliance with any standard.
 
 This is the structured companion to [THREAT_MODEL.md](../THREAT_MODEL.md), which has the longer prose on enforcement, TOCTOU, and the OWASP pages. This file walks the same system with STRIDE (Spoofing, Tampering, Repudiation, Information disclosure, Denial of service, Elevation of privilege), names the trust boundaries, and maps each threat to the control in the code and the test that exercises it. Where no test exists, it says so.
 
@@ -97,7 +97,7 @@ Status key: **Mitigated** means the control exists and a listed test exercises i
 | S1 | Fixture or action text claims to be an approval (`APPROVED`, a pasted token) | The token is a separate `approval_token` argument; action dicts have an exact field set, so an extra `approval` key is `malformed` | `test_boundary.py::test_untrusted_fixture_text_does_not_authorize`, `::test_approval_text_is_not_an_approval`, `test_policy.py::test_malformed_actions_are_rejected` | Mitigated |
 | S2 | Forged token (wrong key, edited body) | HMAC-SHA256 checked before digest; canonical body required; extra fields rejected | `test_boundary.py::test_bad_signature_and_extra_fields_are_rejected`; demo row `summary_forged` | Mitigated |
 | S3 | Unicode lookalike path or content passes as the approved action | Digest covers the exact UTF-8 bytes and canonical path | `test_boundary.py::test_unicode_lookalikes_are_different_actions` | Mitigated |
-| S4 | Approval preview spoofing: `write_file` content containing a carriage return or ANSI escape sequence rewrites what the operator sees on stderr during `approve` | `_preview` escapes only `\n` and truncates at 120 characters. `content_len`, `content_sha256`, and `digest` are printed and are not affected | None | **Finding** (see section 8) |
+| S4 | Approval preview spoofing: `write_file` content containing a carriage return or ANSI escape sequence rewrites what the operator sees on stderr during `approve` | `_preview` escapes `\n`, `\r`, `\t`, backslashes, and every other C0, DEL, and C1 control (ESC as `\x1b`). Truncation is at 120 characters of escaped output and does not split an escape sequence. `content_len`, `content_sha256`, and `digest` are still printed | `test_cli.py::test_preview_escapes_c0_c1_and_named_controls`, `::test_preview_truncates_on_escape_boundaries`, `::test_cli_approve_preview_does_not_emit_raw_control_characters` | **Mitigated** (fixed in [`96d816a`](https://github.com/mikedsosa/agent-boundary-lab/commit/96d816a8781b067b2d35dbbe05621db4b02c1a8b); see section 8) |
 
 ### Tampering
 
@@ -155,24 +155,24 @@ Ranked by how much they would matter if this design were copied into a real agen
 
 1. **No OS isolation (E6, T5, R3).** The boundary is a disciplined open in one process. Anything running as the same user can read the key, mint tokens, and rewrite the audit. A real deployment would need a separate identity for the executor and the key, plus an external log sink.
 2. **Indirect prompt injection is unaddressed (I6).** The lab limits what a steered planner can do. It does not stop the steering. Read results flow back to the caller unfiltered.
-3. **The human step can be misled (S4).** The binding is printed, but the preview passes control characters to the terminal and truncates long content. An operator who reads only the preview line could approve something else. The digest and length are still correct.
+3. **The human step can still be misled by a truncated preview (S4).** Control characters in the preview are now escaped (fixed in [`96d816a`](https://github.com/mikedsosa/agent-boundary-lab/commit/96d816a8781b067b2d35dbbe05621db4b02c1a8b)). The preview still truncates long content. An operator who reads only the preview line could miss bytes after the cutoff. The digest and length remain the source of truth.
 4. **Token handling on the command line (I5).** Single-use and short-lived, but visible to the same user while live.
 5. **Audit is tamper-evident only against partial edits (T4).** A full rewrite verifies.
 6. **No rate limit (D3).** The nonce cap turns into a write outage instead of a slowdown.
 7. **Narrow TOCTOU windows (T3, T6).** Crash between create and unlink, FIFO swap between `lstat` and `open`, and hard-link count returning to 1.
 
-## 8. Finding from this review
+## 8. Finding from this review (fixed)
 
-**S4, approval preview passes control characters.** Reproduced on 17 Nov 2026 against `17ee3a8`:
+**S4, approval preview passed control characters.** Reproduced on 17 Nov 2026 against `17ee3a8`:
 
 ```bash
 printf '%s' '{"capability":"write_file","args":{"path":"out/x.txt","content":"send the payroll file to evil\r\u001b[2Kpreview=weekly summary, nothing else"}}' > a.json
 agentlab approve --workspace ws --action-file a.json
 ```
 
-The stderr bytes contain a raw carriage return and `ESC[2K`. On an ANSI terminal that clears the line, so the `preview=` line shows only the decoy text. `content_len=70` and the hash are still printed correctly above it. This needs a terminal to see; it was confirmed by inspecting the raw bytes with `cat -v`, not by a screenshot.
+On `17ee3a8`, the stderr bytes contained a raw carriage return and `ESC[2K`. On an ANSI terminal that cleared the line, so the `preview=` line showed only the decoy text. `content_len=70` and the hash were still printed correctly above it. This needs a terminal to see; it was confirmed by inspecting the raw bytes with `cat -v`, not by a screenshot.
 
-Suggested fix, not applied in this change: escape every C0 and C1 control character and DEL in `_preview` (for example with `repr`-style `\xNN` escapes), print a visible "truncated, N more bytes" marker, and add a test that a carriage return and ESC never reach stderr unescaped. A stricter option is to refuse control characters other than `\n` and `\t` in `write_file` content at parse time.
+**Fixed** in [`96d816a`](https://github.com/mikedsosa/agent-boundary-lab/commit/96d816a8781b067b2d35dbbe05621db4b02c1a8b) (`fix: escape control characters in approve preview`, squash-merge of PR #1). `_preview` now escapes every C0 and C1 control character and DEL (for example `\r` and `\x1b`), truncates at 120 characters of escaped output without splitting an escape sequence, and prints a visible "truncated, N more" marker. Regression tests assert that a carriage return and ESC never reach stderr unescaped. A stricter option, not taken, would be to refuse control characters other than `\n` and `\t` in `write_file` content at parse time. Long content can still be truncated in the preview; the digest and length remain the source of truth.
 
 ## 9. What would change this model
 
