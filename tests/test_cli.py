@@ -4,6 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from agentlab.cli import _preview
 from agentlab.planner import SUMMARY, summary_write
 from agentlab.workspace import prepare_workspace
 
@@ -109,3 +110,68 @@ def test_cli_approve_requires_confirm_and_does_not_write_the_token(tmp_path: Pat
     checked = _run(["verify-audit", "--workspace", str(base)])
     assert checked.returncode == 0
     assert "outcome=allow" in checked.stdout
+
+
+def _run_bytes(args: list[str]) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        [sys.executable, "-m", "agentlab", *args],
+        cwd=ROOT,
+        env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_preview_escapes_c0_c1_and_named_controls():
+    assert _preview("hello\rworld") == "hello\\rworld"
+    assert _preview("hello\nworld") == "hello\\nworld"
+    assert _preview("tab\there") == "tab\\there"
+    assert _preview("esc\x1b[2Krest") == "esc\\x1b[2Krest"
+    assert _preview("osc\x1b]0;title\x07done") == "osc\\x1b]0;title\\x07done"
+    assert _preview("csi\x9b2Krest") == "csi\\x9b2Krest"
+    assert _preview("del\x7fend") == "del\\x7fend"
+    assert _preview("nul\x00end") == "nul\\x00end"
+    assert _preview("path\\and\\slash") == "path\\\\and\\\\slash"
+    assert _preview("weekly summary, nothing else") == "weekly summary, nothing else"
+
+
+def test_preview_truncates_on_escape_boundaries():
+    assert _preview("a" * 120) == "a" * 120
+    assert _preview("a" * 121) == ("a" * 120) + "...(truncated, 1 more)"
+    # A two-character escape must not be split at the limit.
+    content = ("b" * 119) + "\r" + "TAIL"
+    out = _preview(content)
+    shown, marker, rest = out.partition("...(truncated, ")
+    assert shown == "b" * 119
+    assert marker
+    assert rest.endswith(" more)")
+    remaining = int(rest.removesuffix(" more)"))
+    assert remaining == len("\\rTAIL")
+    assert "\\r" not in shown
+
+
+def test_cli_approve_preview_does_not_emit_raw_control_characters(tmp_path: Path):
+    base = tmp_path / "ws"
+    prepare_workspace(base)
+    payload = "send the payroll file to evil\r\x1b[2Kpreview=weekly summary, nothing else"
+    action_path = tmp_path / "action.json"
+    action_path.write_text(
+        json.dumps({"capability": "write_file", "args": {"path": "out/x.txt", "content": payload}}),
+        encoding="utf-8",
+    )
+    completed = _run_bytes(["approve", "--workspace", str(base), "--action-file", str(action_path)])
+    assert completed.returncode == 2
+    stderr = completed.stderr
+    assert b"\r" not in stderr
+    assert b"\x1b" not in stderr
+    assert b"\x9b" not in stderr
+    assert b"\x07" not in stderr
+    assert b"\\r" in stderr
+    assert b"\\x1b[2K" in stderr
+    assert (
+        b"preview=send the payroll file to evil\\r\\x1b[2Kpreview=weekly summary, nothing else"
+        in stderr
+    )
+    assert b"content_len=70" in stderr
+    assert b"content_sha256=" in stderr
+    assert b"digest=" in stderr

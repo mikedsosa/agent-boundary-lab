@@ -122,11 +122,42 @@ def _load_action(path: Path) -> object | None:
         return None
 
 
+_PREVIEW_LIMIT = 120
+
+_PREVIEW_NAMED = {
+    "\\": "\\\\",
+    "\n": "\\n",
+    "\r": "\\r",
+    "\t": "\\t",
+}
+
+
+def _escape_preview_char(ch: str) -> str:
+    if ch in _PREVIEW_NAMED:
+        return _PREVIEW_NAMED[ch]
+    code = ord(ch)
+    # Neutralize C0, DEL, and C1 so CR, ANSI/CSI/OSC, and other controls
+    # cannot rewrite the operator's terminal during approve preview.
+    if code < 0x20 or 0x7F <= code <= 0x9F:
+        return f"\\x{code:02x}"
+    return ch
+
+
 def _preview(content: str) -> str:
-    flat = content.replace("\n", "\\n")
-    if len(flat) > 120:
-        return flat[:120] + "...(truncated)"
-    return flat
+    parts = [_escape_preview_char(ch) for ch in content]
+    flat = "".join(parts)
+    if len(flat) <= _PREVIEW_LIMIT:
+        return flat
+    used = 0
+    kept: list[str] = []
+    for piece in parts:
+        if used + len(piece) > _PREVIEW_LIMIT:
+            break
+        kept.append(piece)
+        used += len(piece)
+    shown = "".join(kept)
+    remaining = len(flat) - len(shown)
+    return f"{shown}...(truncated, {remaining} more)"
 
 
 def _now() -> int:
